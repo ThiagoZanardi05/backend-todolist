@@ -28,7 +28,7 @@ public class AuthService {
         try {
             log.debug("Searching for user by username...");
             UserEntity user = userService.findByUsername(username);
-            log.info("User found: {}", user.getUsername());
+            log.info("User found: {}", user.username);
 
             log.debug("Checking password match...");
             boolean passwordMatches = passwordEncoder.matches(password, user.getPassword());

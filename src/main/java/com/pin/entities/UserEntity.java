@@ -25,7 +25,7 @@ public class UserEntity {
     @NotBlank(message = "Username não pode ser vazio ou nulo.")
     @Size(min = 3, max = 50, message = "Username deve ter entre 3 e 50 caracteres.")
     @Column(nullable = false, unique = true)
-    private String username;
+    public String username;
 
     @NotBlank(message = "Password não pode ser vazio ou nulo.")
     @Size(min = 8, message = "Password deve ter no mínimo 8 caracteres.")

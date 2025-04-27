@@ -37,7 +37,7 @@ public class UserService {
     }
 
     public UserEntity findByUsername(String username) {
-        return userRepository.findByUsername(username) // Agora retorna Optional
+        return userRepository.findByUsername(username) //
                 .orElseThrow(() -> new UserNotFoundException("Usuário não encontrado com username: " + username));
     }
 
