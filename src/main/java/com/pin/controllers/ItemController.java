@@ -149,4 +149,6 @@ public class ItemController {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Erro inesperado ao deletar item: " + e.getMessage(), e);
         }
     }
+
+
 }

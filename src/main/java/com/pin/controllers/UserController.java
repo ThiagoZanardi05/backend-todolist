@@ -161,4 +161,10 @@ public class UserController {
         successResponse.put("message", message);
         return successResponse;
     }
+
+    @GetMapping("/auth/user-id")
+    public ResponseEntity<Long> getUserId() {
+        return ResponseEntity.ok(userService.getLoggedUserId());
+    }
+
 }
