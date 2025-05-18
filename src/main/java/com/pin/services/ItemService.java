@@ -2,38 +2,34 @@ package com.pin.services;
 
 import com.pin.entities.GrupoEntity;
 import com.pin.entities.ItemEntity;
-import com.pin.entities.UserEntity; // <-- Importar UserEntity
-import com.pin.repositories.GrupoRepository; // <-- Importar GrupoRepository
+import com.pin.entities.UserEntity;
+import com.pin.exception.UserNotFoundException;
+import com.pin.repositories.GrupoRepository;
 import com.pin.repositories.ItemRepository;
-import com.pin.repositories.UserRepository; // <-- Importar UserRepository
-import org.slf4j.Logger; // <-- Importar Logger
-import org.slf4j.LoggerFactory; // <-- Importar LoggerFactory
+// Remova UserRepository daqui se não for usado diretamente, UserService lida com isso.
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.data.domain.PageRequest; // Necessário se usar findAll20 com paginação real
-import org.springframework.data.domain.Pageable;   // Necessário se usar findAll20 com paginação real
 
-
-import java.util.ArrayList;
-import java.util.Date; // Importar Date
+import java.util.Date;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 
 @Service
 public class ItemService {
 
-    private static final Logger log = LoggerFactory.getLogger(ItemService.class); // Logger para debug
+    private static final Logger log = LoggerFactory.getLogger(ItemService.class);
 
     @Autowired
     private ItemRepository itemRepository;
 
-    @Autowired // <<--- INJETAR REPOSITÓRIO DO GRUPO
-    private GrupoRepository grupoRepository;
+    @Autowired
+    private GrupoRepository grupoRepository; // Para buscar GrupoEntity
 
-    @Autowired // <<--- INJETAR REPOSITÓRIO DO USUÁRIO
-    private UserRepository userRepository;
+    @Autowired
+    private UserService userService; // Injete o UserService para obter o usuário logado
 
     @Transactional(readOnly = true)
     public List<ItemEntity> findAll() {
@@ -41,86 +37,71 @@ public class ItemService {
         return itemRepository.findAll();
     }
 
-    @Transactional // Garante que tudo acontece em uma transação
+    @Transactional
     public ItemEntity save(ItemEntity item) {
         log.info("Iniciando processo de save para item com nome: {}", item.getNome());
 
-        // 1. Validar e Associar Grupo (Assumindo que grupo é obrigatório)
-        if (item.getGrupo() == null || item.getGrupo().getId() == null) {
-            log.error("Tentativa de salvar item sem ID de grupo.");
-            throw new IllegalArgumentException("Grupo é obrigatório para salvar o item.");
-        }
+        // 1. Obter o UserEntity local correspondente ao usuário autenticado via Keycloak
+        UserEntity currentUser = userService.findOrCreateUserFromToken(); // Usa o método atualizado
+        item.setUser(currentUser);
+        log.info("UserEntity local ID {} (username: {}) associado ao ItemEntity.", currentUser.getId(), currentUser.getUsername());
 
-        Long grupoId = item.getGrupo().getId();
-        log.info("Buscando GrupoEntity para associação com ID: {}", grupoId);
-        GrupoEntity managedGrupo = grupoRepository.findById(grupoId)
-                .orElseThrow(() -> {
-                    log.error("Grupo com ID {} não encontrado no banco durante o save!", grupoId);
-                    // Este erro deve ser capturado pelo controller e retornar 400 ou 404
-                    return new RuntimeException("Grupo associado não encontrado com ID: " + grupoId);
-                });
-        item.setGrupo(managedGrupo); // <<< Define a entidade GRUPO gerenciada pelo JPA
-        log.info("GrupoEntity ID {} associado ao ItemEntity.", grupoId);
-
-        // 2. Validar e Associar Usuário (Assumindo que usuário é obrigatório)
-        if (item.getUser() == null || item.getUser().getId() == null) {
-            // Se o usuário não vier do request, você PRECISA obter o usuário logado aqui
-            // Exemplo (simplificado - implemente sua lógica de segurança):
-            // UserEntity currentUser = userService.getCurrentAuthenticatedUser();
-            // item.setUser(currentUser);
-            // log.info("Usuário logado ID {} associado ao item.", currentUser.getId());
-
-            // Se não houver usuário logado e for obrigatório:
-            log.error("Tentativa de salvar item sem ID de usuário e sem usuário logado definido.");
-            throw new IllegalArgumentException("Usuário é obrigatório para salvar o item.");
-        } else {
-            // Se o ID do usuário veio do request (como no teste do Postman)
-            Long userId = item.getUser().getId();
-            log.info("Buscando UserEntity para associação com ID: {}", userId);
-            UserEntity managedUser = userRepository.findById(userId)
+        // 2. Validar e Associar Grupo (se o grupo vier no request e for obrigatório)
+        if (item.getGrupo() != null && item.getGrupo().getId() != null) {
+            Long grupoId = item.getGrupo().getId();
+            log.debug("Buscando GrupoEntity para associação com ID: {}", grupoId);
+            GrupoEntity managedGrupo = grupoRepository.findById(grupoId)
                     .orElseThrow(() -> {
-                        log.error("Usuário com ID {} não encontrado no banco durante o save!", userId);
-                        return new RuntimeException("Usuário associado não encontrado com ID: " + userId);
+                        log.error("Grupo com ID {} não encontrado no banco durante o save do item!", grupoId);
+                        return new IllegalArgumentException("Grupo associado não encontrado com ID: " + grupoId);
                     });
-            item.setUser(managedUser); // <<< Define a entidade USUÁRIO gerenciada pelo JPA
-            log.info("UserEntity ID {} associado ao ItemEntity.", userId);
+            item.setGrupo(managedGrupo);
+            log.debug("GrupoEntity ID {} associado ao ItemEntity.", grupoId);
+        } else if (item.getGrupo() != null) {
+            // Se um objeto grupo foi passado mas sem ID, é um erro ou precisa de criação de grupo.
+            // Para este exemplo, vamos considerar um erro se o ID do grupo não for fornecido.
+            log.warn("Tentativa de salvar item com objeto GrupoEntity, mas sem ID de grupo. Verifique o payload.");
+            throw new IllegalArgumentException("ID do Grupo é necessário se o objeto Grupo for fornecido.");
+        } else {
+            log.debug("Item salvo sem associação a um grupo específico (grupo não fornecido ou ID nulo).");
+            item.setGrupo(null); // Garante que está nulo se não for associado.
         }
 
 
         // 3. Outras Validações/Lógicas (Ex: Data default)
         if (item.getData() == null) {
-            item.setData(new Date()); // Usa java.util.Date
-            log.info("Data do item definida para a data/hora atual.");
+            item.setData(new Date());
+            log.debug("Data do item definida para a data/hora atual.");
         }
-        // Garante que descrição não seja nula se vier como null (embora @Column(nullable=false) deva pegar)
         if (item.getDescricao() == null) {
-            log.warn("Descrição do item chegou como null, definindo para string vazia.");
-            item.setDescricao(""); // Evita null se a coluna for NOT NULL
+            // A anotação @Column(nullable=false) na entidade deve tratar isso no nível do banco.
+            // Se a coluna for nullável, você pode definir um valor padrão.
+            log.debug("Descrição do item é null. Será persistido como null se a coluna permitir.");
         }
 
-
-        // 4. Log Final e Persistência
-        log.info("Objeto ItemEntity COMPLETO E ASSOCIADO pronto para salvar: ID={}, Nome={}, Descricao={}, GrupoID={}, UserID={}",
-                item.getId(), item.getNome(), item.getDescricao(), item.getGrupo().getId(), item.getUser().getId());
+        log.debug("Objeto ItemEntity pronto para salvar: Nome={}, Descricao={}, GrupoID={}, UserID={}",
+                item.getNome(), item.getDescricao(),
+                (item.getGrupo() != null ? item.getGrupo().getId() : "N/A"),
+                item.getUser().getId());
         try {
             ItemEntity savedItem = itemRepository.save(item);
             log.info("ItemEntity salvo com sucesso com novo ID: {}", savedItem.getId());
             return savedItem;
         } catch (Exception e) {
-            log.error("Erro EXATO durante itemRepository.save: {}", e.getMessage(), e);
-            // Re-lança a exceção para o controller tratar e retornar 400/500
-            throw e;
+            log.error("Erro durante itemRepository.save: {}", e.getMessage(), e);
+            // Re-lança a exceção para o controller tratar e retornar resposta HTTP apropriada
+            throw new RuntimeException("Falha ao salvar o item no banco de dados.", e);
         }
     }
 
     @Transactional(readOnly = true)
     public ItemEntity findById(Long id) {
         log.debug("Buscando item por ID: {}", id);
-        Optional<ItemEntity> itemOptional = itemRepository.findById(id);
-        return itemOptional.orElseThrow(() -> {
-            log.warn("Item não encontrado com ID: {}", id);
-            return new RuntimeException("Item not found with id: " + id); // Ou exceção customizada
-        });
+        return itemRepository.findById(id)
+                .orElseThrow(() -> {
+                    log.warn("Item não encontrado com ID: {}", id);
+                    return new UserNotFoundException("Item não encontrado com id: " + id); // UserNotFound é genérico, poderia ser ItemNotFoundException
+                });
     }
 
     @Transactional
@@ -128,117 +109,96 @@ public class ItemService {
         log.info("Alternando estado favorito para item ID: {}", id);
         ItemEntity item = findById(id); // Reutiliza findById que já lança exceção se não achar
         item.setFavorito(!item.isFavorito());
-        ItemEntity updatedItem = itemRepository.save(item); // Salva a alteração
+        ItemEntity updatedItem = itemRepository.save(item);
         log.info("Estado favorito do item ID {} atualizado para: {}", id, updatedItem.isFavorito());
         return updatedItem;
     }
 
-    // Otimize os métodos findAllUnMarked e findAllGroup se ainda não o fez no ItemRepository
     @Transactional(readOnly = true)
     public List<ItemEntity> findAllUnMarked(Long grupoId) {
         log.debug("Buscando itens não marcados para grupo ID: {}", grupoId);
-        // Assume que o método otimizado existe no repositório
         return itemRepository.findByGrupoIdAndFeitaIsFalse(grupoId);
     }
 
+    // findAllGroup foi renomeado para findByGrupoId no repositório
     @Transactional(readOnly = true)
-    public List<ItemEntity> findAllGroup(Long grupoId) {
+    public List<ItemEntity> findItemsByGrupoId(Long grupoId) {
         log.debug("Buscando todos os itens para grupo ID: {}", grupoId);
-        // Assume que o método otimizado existe no repositório
         return itemRepository.findByGrupoId(grupoId);
     }
+
 
     @Transactional(readOnly = true)
     public List<List<ItemEntity>> findAll20(Long grupoId) {
         log.debug("Buscando itens agrupados de 20 para grupo ID: {}", grupoId);
-        // Usando a versão otimizada de findAllGroup
-        List<ItemEntity> total = this.findAllGroup(grupoId);
-        List<List<ItemEntity>> separados = new ArrayList<>();
+        List<ItemEntity> total = this.findItemsByGrupoId(grupoId); // Usa o método corrigido
+        List<List<ItemEntity>> separados = new java.util.ArrayList<>();
         int batchSize = 20;
         for (int i = 0; i < total.size(); i += batchSize) {
             int fim = Math.min(i + batchSize, total.size());
-            separados.add(new ArrayList<>(total.subList(i, fim)));
+            separados.add(new java.util.ArrayList<>(total.subList(i, fim)));
         }
         log.debug("Itens agrupados em {} listas.", separados.size());
         return separados;
     }
 
     @Transactional
-    public ItemEntity update(ItemEntity item) {
-        log.info("Iniciando processo de update para item ID: {}", item.getId());
-        if (item.getId() == null) {
+    public ItemEntity update(ItemEntity itemInput) { // Renomeado para itemInput para clareza
+        log.info("Iniciando processo de update para item ID: {}", itemInput.getId());
+        if (itemInput.getId() == null) {
             throw new IllegalArgumentException("ID do item é obrigatório para atualização.");
         }
 
-        // 1. Busca o item existente OBRIGATORIAMENTE para garantir que ele existe
-        ItemEntity existingItem = itemRepository.findById(item.getId())
+        ItemEntity existingItem = itemRepository.findById(itemInput.getId())
                 .orElseThrow(() -> {
-                    log.error("Item não encontrado para atualização com ID: {}", item.getId());
-                    return new RuntimeException("Item not found with id: " + item.getId());
+                    log.error("Item não encontrado para atualização com ID: {}", itemInput.getId());
+                    return new UserNotFoundException("Item não encontrado com id: " + itemInput.getId());
                 });
-        log.debug("Item existente encontrado para update: {}", existingItem);
+        log.debug("Item existente encontrado para update: {}", existingItem.getNome());
 
-        // 2. Atualiza os campos primitivos/simples
-        existingItem.setNome(item.getNome());
-        // Usa getDescricao() pois o @JsonProperty já deve ter mapeado "description" para "descricao"
-        existingItem.setDescricao(item.getDescricao() != null ? item.getDescricao() : "");
-        existingItem.setFeita(item.isFeita());
-        existingItem.setFavorito(item.isFavorito());
-        existingItem.setData(item.getData()); // Assume que a data pode ser atualizada
+        // Atualiza os campos
+        existingItem.setNome(itemInput.getNome());
+        existingItem.setDescricao(itemInput.getDescricao()); // Descrição pode ser null se a coluna permitir
+        existingItem.setFeita(itemInput.isFeita());
+        existingItem.setFavorito(itemInput.isFavorito());
+        existingItem.setData(itemInput.getData());
 
-        // 3. Atualiza Associação de Grupo (se necessário)
-        GrupoEntity grupoParaAssociar = null; // Começa como null
-        if (item.getGrupo() != null && item.getGrupo().getId() != null) {
-            Long novoGrupoId = item.getGrupo().getId();
-            // Só busca no banco se o ID for diferente do atual ou se o atual for nulo
-            if (existingItem.getGrupo() == null || !novoGrupoId.equals(existingItem.getGrupo().getId())) {
-                log.info("Atualizando associação de Grupo para ID: {}", novoGrupoId);
-                grupoParaAssociar = grupoRepository.findById(novoGrupoId)
-                        .orElseThrow(() -> {
-                            log.error("Grupo com ID {} não encontrado durante update!", novoGrupoId);
-                            return new RuntimeException("Grupo para atualização não encontrado com ID: " + novoGrupoId);
-                        });
-            } else {
-                grupoParaAssociar = existingItem.getGrupo(); // Mantém o grupo existente se o ID for o mesmo
+        // Lógica para atualizar o grupo associado, se fornecido
+        if (itemInput.getGrupo() != null && itemInput.getGrupo().getId() != null) {
+            if (existingItem.getGrupo() == null || !itemInput.getGrupo().getId().equals(existingItem.getGrupo().getId())) {
+                GrupoEntity newGrupo = grupoRepository.findById(itemInput.getGrupo().getId())
+                        .orElseThrow(() -> new IllegalArgumentException("Novo grupo associado não encontrado com ID: " + itemInput.getGrupo().getId()));
+                existingItem.setGrupo(newGrupo);
+                log.debug("Grupo do item atualizado para ID: {}", newGrupo.getId());
             }
+        } else if (itemInput.getGrupo() == null && existingItem.getGrupo() != null) {
+            // Se o input do grupo é null, significa que queremos desassociar o grupo
+            log.debug("Desassociando grupo do item ID: {}", existingItem.getId());
+            existingItem.setGrupo(null);
         }
-        // Define o grupo encontrado (ou null se nenhum grupo veio no request)
-        existingItem.setGrupo(grupoParaAssociar);
-        if (grupoParaAssociar != null) {
-            log.info("Grupo ID {} associado ao item durante update.", grupoParaAssociar.getId());
-        } else {
-            log.info("Grupo desassociado do item durante update.");
-        }
+        // O usuário (dono) do item geralmente não muda em uma operação de update do item.
+        // Se precisar mudar, adicione lógica similar à do grupo.
 
-
-        // 4. Atualiza Associação de Usuário (GERALMENTE NÃO É FEITO NO UPDATE DO ITEM)
-        // Se precisar MUITO atualizar o usuário dono do item (cuidado!), use lógica similar à do grupo:
-        // Verifique se item.getUser() e item.getUser().getId() não são nulos
-        // Compare com existingItem.getUser().getId()
-        // Se diferente, busque o novo usuário com userRepository.findById()
-        // Faça existingItem.setUser(managedUser) ou existingItem.setUser(null)
-
-        // 5. Log Final e Persistência
-        log.info("Objeto ItemEntity PRONTO PARA salvar (update): {}", existingItem);
         try {
-            ItemEntity updatedItem = itemRepository.save(existingItem); // save() faz update se ID existe
+            ItemEntity updatedItem = itemRepository.save(existingItem);
             log.info("ItemEntity atualizado com sucesso ID: {}", updatedItem.getId());
             return updatedItem;
         } catch (Exception e) {
-            log.error("Erro EXATO durante itemRepository.save (update): {}", e.getMessage(), e);
-            throw e;
+            log.error("Erro durante itemRepository.save (update): {}", e.getMessage(), e);
+            throw new RuntimeException("Falha ao atualizar o item no banco de dados.",e);
         }
     }
 
     @Transactional
     public String delete(Long id) {
         log.info("Tentando deletar item com ID: {}", id);
-        // Reutiliza findById para verificar existência antes
-        ItemEntity item = findById(id); // Lança exceção se não existir
+        if (!itemRepository.existsById(id)) {
+            log.warn("Tentativa de deletar item inexistente com ID: {}", id);
+            throw new UserNotFoundException("Item não encontrado para deletar com ID: " + id);
+        }
         itemRepository.deleteById(id);
-        String message = "Item with id " + id + " deleted successfully.";
+        String message = "Item com id " + id + " deletado com sucesso.";
         log.info(message);
         return message;
-        // O catch da exceção do findById pode ser tratado no Controller
     }
 }
