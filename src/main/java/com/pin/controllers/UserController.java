@@ -1,170 +1,131 @@
 package com.pin.controllers;
 
 import com.pin.entities.UserEntity;
-import com.pin.exception.UserNotFoundException;
-import com.pin.exception.UsernameAlreadyExistsException;
 import com.pin.services.UserService;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.DataAccessException;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
-import java.util.HashMap;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/user")
-@CrossOrigin(origins = "http://localhost:4200")
+// @CrossOrigin(origins = "http://localhost:4200") // CORS é configurado globalmente em SecurityConfig
 public class UserController {
+
+    private static final Logger log = LoggerFactory.getLogger(UserController.class);
 
     @Autowired
     private UserService userService;
 
-    @PostMapping("/save")
-    public ResponseEntity<Object> save(@RequestBody UserEntity user) {
+    // Endpoint para obter o ID local do usuário autenticado.
+    // O UserService.getLoggedUserId() já usa o findOrCreateUserFromToken.
+    @GetMapping("/auth/user-id")
+    @PreAuthorize("isAuthenticated()") // Qualquer usuário autenticado pode acessar
+    public ResponseEntity<Long> getAuthenticatedUserId() {
         try {
-            return new ResponseEntity<>(userService.save(user), HttpStatus.CREATED);
-        } catch (UsernameAlreadyExistsException e) {
-            return ResponseEntity
-                    .status(HttpStatus.CONFLICT)
-                    .body(createErrorResponse(e.getMessage()));
-        } catch (DataAccessException e) {
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Erro de banco de dados ao salvar usuário."));
-        } catch (RuntimeException e) {
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse("Erro inesperado ao salvar usuário: " + e.getMessage()));
+            return ResponseEntity.ok(userService.getLoggedUserId());
+        } catch (IllegalStateException e) {
+            log.warn("Erro ao obter ID do usuário logado: {}", e.getMessage());
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, e.getMessage(), e);
         }
     }
 
+    // Endpoint para obter os detalhes do UserEntity local do usuário autenticado
+    @GetMapping("/me")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<UserEntity> getCurrentUserDetails() {
+        try {
+            UserEntity currentUser = userService.findOrCreateUserFromToken();
+            return ResponseEntity.ok(currentUser);
+        } catch (IllegalStateException e) {
+            log.warn("Erro ao obter detalhes do usuário logado: {}", e.getMessage());
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, e.getMessage(), e);
+        }
+    }
+
+
+    // Endpoints para administração de usuários (espelhos locais) - protegidos por ADMIN role
     @GetMapping("/findById")
-    public ResponseEntity<Object> findById(@RequestParam Long id) {
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<UserEntity> findUserByLocalId(@RequestParam Long id) {
         try {
             return ResponseEntity.ok(userService.findById(id));
-        } catch (UserNotFoundException e) {
-            return ResponseEntity
-                    .status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse(e.getMessage()));
-        } catch (DataAccessException e) {
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Erro de banco de dados ao buscar usuário por ID."));
-        } catch (RuntimeException e) {
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse("Erro inesperado ao buscar usuário por ID: " + e.getMessage()));
+        } catch (Exception e) { // UserNotFoundException será capturada aqui
+            log.error("Erro ao buscar usuário por ID local {}: {}", id, e.getMessage());
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage(), e);
         }
     }
 
     @GetMapping("/findByUsername")
-    public ResponseEntity<Object> findByUsername(@RequestParam String username) {
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<UserEntity> findUserByUsername(@RequestParam String username) {
         try {
-            return ResponseEntity.ok(userService.findByUsername(username));
-        } catch (UserNotFoundException e) {
-            return ResponseEntity
-                    .status(HttpStatus.NOT_FOUND) // 404
-                    .body(createErrorResponse(e.getMessage()));
-        } catch (DataAccessException e) {
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Erro de banco de dados ao buscar usuário por username."));
-        } catch (RuntimeException e) {
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse("Erro inesperado ao buscar usuário por username: " + e.getMessage()));
+            // Este busca pelo username no banco local, que deve ser o espelho do Keycloak
+            return ResponseEntity.ok(userService.findByUsernameLocal(username));
+        } catch (Exception e) {
+            log.error("Erro ao buscar usuário por username local {}: {}", username, e.getMessage());
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage(), e);
         }
     }
 
     @GetMapping("/findAll")
-    public ResponseEntity<Object> findAll(Pageable pageable) {
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Page<UserEntity>> findAllUsers(Pageable pageable) {
         try {
             return ResponseEntity.ok(userService.findAll(pageable));
-        } catch (DataAccessException e) {
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Erro de banco de dados ao buscar lista de usuários."));
-        } catch (RuntimeException e) {
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR) // Erro genérico aqui pode ser 500
-                    .body(createErrorResponse("Erro inesperado ao buscar lista de usuários: " + e.getMessage()));
+        } catch (Exception e) {
+            log.error("Erro ao buscar todos os usuários: {}", e.getMessage());
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Erro ao buscar usuários", e);
         }
     }
 
-    @PutMapping("/update")
-    public ResponseEntity<Object> update(@RequestParam Long id, @RequestBody UserEntity user) {
+    @PostMapping("/admin/save-mirror")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<UserEntity> saveUserMirror(@RequestBody UserEntity user) {
         try {
-            user.setId(id);
-            UserEntity updatedUser = userService.update(user);
-            return ResponseEntity.ok(updatedUser);
-        } catch (UserNotFoundException e) {
-            return ResponseEntity
-                    .status(HttpStatus.NOT_FOUND) // 404
-                    .body(createErrorResponse(e.getMessage()));
-        } catch (DataAccessException e) {
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Erro de banco de dados ao atualizar usuário."));
-        } catch (RuntimeException e) {
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse("Erro inesperado ao atualizar usuário: " + e.getMessage()));
+            // Este UserEntity viria com keycloakId, username, role preenchidos
+            // UserService.saveUserMirror faria a lógica de salvar/atualizar o espelho
+            UserEntity savedUser = userService.saveUserMirror(user);
+            return new ResponseEntity<>(savedUser, HttpStatus.CREATED);
+        } catch (IllegalArgumentException e) {
+            log.error("Erro de argumento ao salvar espelho de usuário: {}", e.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        } catch (Exception e) {
+            log.error("Erro inesperado ao salvar espelho de usuário: {}", e.getMessage());
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Erro ao salvar espelho de usuário", e);
         }
     }
 
-    @DeleteMapping("/delete")
-    public ResponseEntity<Object> delete(@RequestParam Long id) {
+    // A atualização de usuários agora deve ser feita no Keycloak.
+    // O espelho local pode ser atualizado via findOrCreateUserFromToken na próxima autenticação.
+
+    @DeleteMapping("/admin/delete-local/{localId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, String>> deleteUserLocal(@PathVariable Long localId) {
         try {
-            return ResponseEntity.ok(createSuccessResponse(userService.delete(id)));
-        } catch (UserNotFoundException e) {
-            return ResponseEntity
-                    .status(HttpStatus.NOT_FOUND) // 404
-                    .body(createErrorResponse(e.getMessage()));
-        } catch (DataAccessException e) {
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Erro de banco de dados ao deletar usuário."));
-        } catch (RuntimeException e) {
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse("Erro inesperado ao deletar usuário: " + e.getMessage()));
+            String message = userService.deleteUserByLocalId(localId);
+            return ResponseEntity.ok(Map.of("message", message));
+        } catch (Exception e) { // Captura UserNotFoundException
+            log.error("Erro ao deletar usuário local ID {}: {}", localId, e.getMessage());
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage(), e);
         }
     }
 
+    // O endpoint /check-username pode ainda ser útil para verificar se um username (vindo do Keycloak)
+    // já está espelhado no banco de dados local, mas seu propósito muda um pouco.
     @GetMapping("/check-username")
-    public ResponseEntity<Object> checkUsernameAvailability(@RequestParam String username) {
-        try {
-            return ResponseEntity.ok(Map.of("isTaken", userService.isUsernameTaken(username)));
-        } catch (DataAccessException e) {
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Erro de banco de dados ao verificar username."));
-        } catch (RuntimeException e) {
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR) // Erro genérico aqui pode ser 500
-                    .body(createErrorResponse("Erro inesperado ao verificar username: " + e.getMessage()));
-        }
+    @PreAuthorize("permitAll()") // Ou proteja se necessário
+    public ResponseEntity<Map<String, Boolean>> checkUsernameAvailability(@RequestParam String username) {
+        // Verifica se o username já existe no banco de dados LOCAL.
+        // Isso não verifica no Keycloak.
+        return ResponseEntity.ok(Map.of("isTakenLocally", userService.isUsernameTaken(username)));
     }
-
-    private Map<String, String> createErrorResponse(String message) {
-        Map<String, String> errorResponse = new HashMap<>();
-        errorResponse.put("message", message);
-        return errorResponse;
-    }
-
-    private Map<String, String> createSuccessResponse(String message) {
-        Map<String, String> successResponse = new HashMap<>();
-        successResponse.put("message", message);
-        return successResponse;
-    }
-
-    @GetMapping("/auth/user-id")
-    public ResponseEntity<Long> getUserId() {
-        return ResponseEntity.ok(userService.getLoggedUserId());
-    }
-
 }

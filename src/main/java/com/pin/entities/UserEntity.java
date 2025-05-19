@@ -2,7 +2,8 @@ package com.pin.entities;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
-import jakarta.validation.constraints.*;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -14,43 +15,51 @@ import java.util.List;
 @Getter
 @AllArgsConstructor
 @NoArgsConstructor
-@Table(name = "users")
+@Table(name = "users") // Boa prática definir o nome da tabela explicitamente
 @Entity
 public class UserEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    private Long id; // ID interno do seu banco
 
     @NotBlank(message = "Username não pode ser vazio ou nulo.")
-    @Size(min = 3, max = 50, message = "Username deve ter entre 3 e 50 caracteres.")
+    @Size(min = 1, max = 255, message = "Username deve ter entre 1 e 255 caracteres.") // Ajuste os tamanhos conforme necessário
     @Column(nullable = false, unique = true)
-    public String username;
+    public String username; // Este será o username do Keycloak (ex: preferred_username)
 
-    @NotBlank(message = "Password não pode ser vazio ou nulo.")
-    @Size(min = 8, message = "Password deve ter no mínimo 8 caracteres.")
-    @Column(nullable = false)
+    // Campo de senha não é mais usado para autenticação.
+    // Pode ser removido ou mantido como nullável se houver dados antigos.
+    @Column(nullable = true)
     private String password;
 
-    @NotBlank(message = "Role não pode ser vazio ou nulo.")
-    @Column(nullable = false)
+    // Este 'role' pode ser usado para armazenar um role principal da aplicação,
+    // sincronizado a partir dos roles do Keycloak.
+    @Column(nullable = true) // Pode ser null se os roles forem sempre lidos do token em tempo real
     private String role;
 
-    @NotNull
-    @Min(value = 0, message = "Tentativas não pode ser menor que 0.")
-    @Max(value = 3, message = "Tentativas não pode ser maior que 3.")
-    @Column(nullable = false, columnDefinition = "int default 0")
-    private int tentativas;
+    // O campo 'tentativas' provavelmente não é mais necessário, pois o Keycloak gerencia isso.
+    // @NotNull
+    // @Min(value = 0, message = "Tentativas não pode ser menor que 0.")
+    // @Max(value = 3, message = "Tentativas não pode ser maior que 3.")
+    // @Column(nullable = false, columnDefinition = "int default 0")
+    // private int tentativas;
 
-    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
-    @JsonIgnoreProperties({"user", "itens"})
+    // Adicionado para armazenar o ID do usuário do Keycloak (claim 'sub' do JWT)
+    // Este é o link mais confiável para o usuário no Keycloak.
+    @Column(unique = true, nullable = true, name = "keycloak_id") // Pode torná-lo nullable=false após migração/sincronização inicial
+    private String keycloakId;
+
+    // Relacionamentos (Usar FetchType.LAZY por padrão para coleções)
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @JsonIgnoreProperties(value = {"user", "itens"}, allowSetters = true) // allowSetters=true pode ajudar com desserialização
     private List<GrupoEntity> grupos;
 
-    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
-    @JsonIgnoreProperties({"user", "grupo"})
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @JsonIgnoreProperties(value = {"user", "grupo"}, allowSetters = true)
     private List<ItemEntity> itens;
 
-    @ManyToMany(mappedBy = "user", fetch = FetchType.EAGER)
-    @JsonIgnoreProperties({"users"})
-    private List<EventoEntity> eventos;
+    @ManyToMany(mappedBy = "user", fetch = FetchType.LAZY) // 'user' deve ser o nome do campo na EventoEntity que mapeia para UserEntity
+    @JsonIgnoreProperties(value = {"users", "eventos"}, allowSetters = true) // Ajuste 'users' ou 'eventos' se necessário
+    private List<EventoEntity> eventos; // Verifique o mappedBy na entidade EventoEntity
 }
